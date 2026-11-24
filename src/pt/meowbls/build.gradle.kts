@@ -12,3 +12,7 @@ extension {
     contentWarning = ContentWarning.SAFE
     sourceNames = listOf("Meow Fansub")
 }
+
+dependencies {
+    implementation("org.jsoup:jsoup:1.18.3")
+}

@@ -15,4 +15,5 @@ extension {
 
 dependencies {
     implementation("org.jsoup:jsoup:1.18.3")
+    implementation("org.jspecify:jspecify:1.0.0")
 }

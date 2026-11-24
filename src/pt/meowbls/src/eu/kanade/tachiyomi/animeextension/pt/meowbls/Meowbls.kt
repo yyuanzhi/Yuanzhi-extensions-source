@@ -2,6 +2,7 @@ package eu.kanade.tachiyomi.animeextension.pt.meowbls
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -30,16 +31,14 @@ class Meowbls : ParsedAnimeHttpSource() {
     private fun wpPage(path: String, page: Int): String =
         if (page <= 1) "$baseUrl$path" else "$baseUrl${path.trimEnd('/')}/page/$page/"
 
-    private fun Response.toDoc(): Document = Jsoup.parse(this.body!!.string(), this.request.url.toString())
+    private fun Response.toDoc(): Document =
+        Jsoup.parse(this.body!!.string(), this.request.url.toString())
 
     private fun toAnime(element: Element): SAnime? {
         val link = element.selectFirst("div.data h3 a") ?: return null
         val href = link.absUrl("href")
-        if (href.contains("/series/").not() && href.contains("/filmes/").not() &&
-            href.contains("/episodios/").not()
-        ) {
-            return null
-        }
+        val valid = href.contains("/series/") || href.contains("/filmes/") || href.contains("/episodios/")
+        if (!valid) return null
         return SAnime.create().apply {
             setUrlWithoutDomain(href)
             title = link.text().ifBlank { element.selectFirst("img")?.attr("alt").orEmpty() }
@@ -47,8 +46,11 @@ class Meowbls : ParsedAnimeHttpSource() {
         }
     }
 
-    private fun imageFromElement(element: Element): String? =
-        element.selectFirst("img")?.let { it.absUrl("src").ifBlank { it.absUrl("data-src") } }?.ifBlank { null }
+    private fun imageFromElement(element: Element): String? {
+        val img = element.selectFirst("img") ?: return null
+        val src = img.absUrl("src").ifBlank { img.absUrl("data-src") }
+        return src.ifBlank { null }
+    }
 
     private fun parsePage(doc: Document): AnimesPage {
         val items = doc.select(itemSelector).mapNotNull { toAnime(it) }.distinctBy { it.url }
@@ -87,7 +89,6 @@ class Meowbls : ParsedAnimeHttpSource() {
 
     // detalhes
     override fun animeDetailsParse(response: Response): SAnime = animeDetailsParse(response.toDoc())
-    override fun animeDetailsSelector(): String = "div.sheader"
 
     override fun animeDetailsParse(document: Document): SAnime {
         var doc = document
@@ -107,7 +108,7 @@ class Meowbls : ParsedAnimeHttpSource() {
         }
     }
 
-    // temporadas (o site é de temporada única; usa lista plana)
+    // temporadas (site de temporada única: lista plana)
     override fun seasonListParse(response: Response): List<SAnime> = emptyList()
     override fun seasonListSelector(): String = "div#seasons div.se-c"
     override fun seasonFromElement(element: Element): SAnime = SAnime.create().apply {
@@ -157,31 +158,34 @@ class Meowbls : ParsedAnimeHttpSource() {
         SimpleDateFormat("MMM. dd, yyyy", Locale.ENGLISH).parse(raw)?.time ?: 0L
     }.getOrDefault(0L)
 
-    // vídeos
-    override fun videoListSelector(): String = "#playeroptionsul li"
+    // hosters e vídeos
+    override fun hosterListRequest(episode: SEpisode): Request = GET(episode.url, headers)
 
-    override fun videoListParse(response: Response): List<Video> {
+    override fun hosterListParse(response: Response): List<Hoster> {
         val doc = response.toDoc()
-        val html = doc.outerHtml()
-        val videos = mutableListOf<Video>()
-
-        M3U8_REGEX.findAll(html).forEach { videos.add(buildVideo(it.groupValues[1])) }
-
-        val postId = doc.selectFirst("[data-post]")?.attr("data-post")
-            ?: POST_ID_REGEX.find(html)?.groupValues?.get(1)
-
-        if (postId != null) {
-            runCatching {
-                val api = "$baseUrl/wp-json/dooplayer/v2/$postId/tv/1"
-                val json = client.newCall(GET(api, headers)).execute().body!!.string()
-                val embed = EMBED_REGEX.find(json)?.groupValues?.get(1) ?: return@runCatching
-                val embedHeaders = headers.newBuilder().add("Referer", "$baseUrl/").build()
-                val embedHtml = client.newCall(GET(embed, embedHeaders)).execute().body!!.string()
-                M3U8_REGEX.findAll(embedHtml).forEach { videos.add(buildVideo(it.groupValues[1], embed)) }
-            }
+        return doc.select("#playeroptionsul li").mapNotNull { li ->
+            val post = li.attr("data-post").ifBlank { return@mapNotNull null }
+            val nume = li.attr("data-nume").ifBlank { "1" }
+            val type = li.attr("data-type").ifBlank { "tv" }
+            val hosterName = li.selectFirst("span.title")?.text()?.ifBlank { null } ?: "Player"
+            Hoster(
+                hosterUrl = "$baseUrl/wp-json/dooplayer/v2/$post/$type/$nume",
+                hosterName = hosterName,
+            )
         }
+    }
 
-        return videos.distinctBy { it.videoUrl }
+    override fun videoListRequest(hoster: Hoster): Request = GET(hoster.hosterUrl, headers)
+
+    override fun videoListParse(response: Response, hoster: Hoster): List<Video> {
+        val json = response.body!!.string()
+        val embed = EMBED_REGEX.find(json)?.groupValues?.get(1) ?: return emptyList()
+        val embedHeaders = headers.newBuilder().add("Referer", "$baseUrl/").build()
+        val embedHtml = client.newCall(GET(embed, embedHeaders)).execute().body!!.string()
+        return M3U8_REGEX.findAll(embedHtml)
+            .map { buildVideo(it.groupValues[1], embed) }
+            .distinctBy { it.videoUrl }
+            .toList()
     }
 
     private fun buildVideo(url: String, referer: String? = null): Video {
@@ -189,14 +193,11 @@ class Meowbls : ParsedAnimeHttpSource() {
             .add("Referer", referer ?: "$baseUrl/")
             .add("Origin", "https://player.jmvstream.com")
             .build()
-        return Video(url = url, quality = "JMV HD", headers = h)
+        return Video(url = url, quality = "JMV HD", videoUrl = url, headers = h)
     }
-
-    override fun videoFromElement(element: Element): Video = Video(url = "", quality = "", headers = headers)
 
     companion object {
         private val M3U8_REGEX = Regex(""""(https://[^"]+\.m3u8[^"]*)"""")
-        private val POST_ID_REGEX = Regex("""data-post="(\d+)"""")
         private val EMBED_REGEX = Regex(""""embed_url":"([^"]+)"""")
     }
                                         }

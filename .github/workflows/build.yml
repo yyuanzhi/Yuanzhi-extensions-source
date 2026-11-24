@@ -1,0 +1,26 @@
+name: Build Meowbls
+on:
+  workflow_dispatch:
+  push:
+    paths: ['src/pt/meowbls/**']
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { java-version: 17, distribution: temurin }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :src:pt:meowbls:assembleDebug --stacktrace
+      - run: |
+          mkdir -p out
+          cp src/pt/meowbls/build/outputs/apk/debug/*.apk out/aniyomi-pt.meowbls-v1.apk
+          cat > out/index.min.json <<'J'
+          [{"name":"Aniyomi: Meow Fansub","pkg":"eu.kanade.tachiyomi.animeextension.pt.meowbls","apk":"aniyomi-pt.meowbls-v1.apk","lang":"pt-BR","code":1,"version":"1","nsfw":0,"sources":[{"name":"Meow Fansub","lang":"pt-BR","id":"7000000000000000001","baseUrl":"https://meowbls.com"}]}]
+          J
+      - run: |
+          cd out && git init -b repo
+          git config user.name a && git config user.email a@b.c
+          git add . && git commit -m build
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" repo

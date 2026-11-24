@@ -188,12 +188,13 @@ class Meowbls : ParsedAnimeHttpSource() {
             .toList()
     }
 
+    @Suppress("DEPRECATION")
     private fun buildVideo(url: String, referer: String? = null): Video {
         val h = headers.newBuilder()
             .add("Referer", referer ?: "$baseUrl/")
             .add("Origin", "https://player.jmvstream.com")
             .build()
-        return Video(url = url, quality = "JMV HD", videoUrl = url, headers = h)
+        return Video(url = url, quality = "JMV HD").copy(videoUrl = url, headers = h)
     }
 
     companion object {
